@@ -471,7 +471,10 @@ Panel {
   Grid {
     id: row
     anchors.centerIn: parent
-    columns: root.vertical ? 1 : 4
+    // One column per visible item. Grid adds the (negative) spacing between
+    // every declared column, visible or not, so a fixed 4 pulled the idle mark
+    // three gaps narrower than its neighbours.
+    columns: root.vertical ? 1 : 1 + (avatars.visible ? 1 : 0) + (metric.visible ? 1 : 0) + (tail.visible ? 1 : 0)
     horizontalItemAlignment: Grid.AlignHCenter
     verticalItemAlignment: Grid.AlignVCenter
     // The icon slot is wider than the mark drawn inside it, which leaves as
@@ -610,10 +613,13 @@ Panel {
     // Close the widget with as much air as the icon slot opens it with, so
     // whatever is beside the mark is not left flush against the next widget.
     // The pull-back applies here too, so add it back or the tail comes up
-    // short of the head.
+    // short of the head. With nothing beside the mark it is hidden, so the
+    // Grid does not pull the mark's own slot in and the widget keeps the same
+    // width as its neighbours.
     Item {
-      readonly property real padding: (avatars.visible || metric.visible)
-        ? Math.round((button.width - root.markSize) / 2) + root.barPull : 0
+      id: tail
+      visible: avatars.visible || metric.visible
+      readonly property real padding: Math.round((button.width - root.markSize) / 2) + root.barPull
       height: root.vertical ? padding : 1
       width: root.vertical ? 1 : padding
     }
