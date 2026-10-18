@@ -65,28 +65,28 @@ chasing a bug that is not there.
   for `desktop-status.json`, which only records a `pid`, so there the app counts
   as running while that pid is a live `grok-bot` process.
 - The watcher builds a snapshot every interval and emits when it differs from
-  the last one (ignoring `generated_ts`), or once a minute regardless. Working
-  expires with time and liveness follows a pid, so file mtimes alone would miss
-  both. The caches below keep this cheap.
+  the last one (ignoring `generated_ts`), or once a minute regardless. Liveness
+  follows a pid and the working cap expires with time, so file mtimes alone
+  would miss both. The caches below keep this cheap.
 
 **Reading it cheaply**
 
 - Transcripts are large and change rarely, so `working_state()` caches by
   **mtime**. Avatar decoding is also cached by blob mtime and cache-directory
   identity; cached files are checked without following symlinks before reuse.
-- A bot is *working* from your newest message until it has been quiet for
-  `WORK_QUIET_S` (90s). 0.71 bots acknowledge at once ("on it…") and keep
-  posting through a turn, and only finished messages are persisted, so an
-  interim note and the final answer look the same on disk. In real transcripts
-  95% of gaps within a turn were under 60s, the longest about two minutes; the
-  price is that a finished turn reads as working for up to 90s more. A
-  structured request for input suppresses the estimate, and it is **capped at
-  900s** (`WORK_CAP_S`) so an unanswered message cannot leave a bot working
-  forever.
+- A bot is *working* only while its transcript ends on a user message with no
+  `send-message` or assistant `message` after it, **capped at 900s**
+  (`WORK_CAP_S`). In 0.71 that window is a few seconds: bots acknowledge at once
+  ("on it…"), only finished messages are persisted, and nothing marks a turn as
+  done. An interim note and the final answer look the same, and a bot can go
+  quiet for minutes mid-turn, so a quiet-window guess was tried and dropped: it
+  showed finished bots as thinking and still missed long silent steps. Do not
+  reintroduce one without a real in-progress signal from the app.
 - 0.71 no longer sets `awaitingUserResponse` for question cards. A card is a
-  `send-message` whose `message.type` is `widget`, with `widget.prompt`. An
-  answered card is always followed by something, so the bot is *awaiting* when
-  its newest non-`event` entry is a card; the prompt becomes the reason.
+  `send-message` whose `message.type` is `widget`, with `widget.prompt`. A
+  tapped answer is stored on the card as `respondedValue`; a typed one shows up
+  as a newer user message. The bot is *awaiting* when its newest card has
+  neither; the prompt becomes the reason.
 - Avatars arrive as base64 data URLs inside one blob. They are decoded to files
   under `~/.local/state/omarchy/omabot/avatars/`, because QML wants files and a
   200KB string per bot has no business crossing a JSON line every two seconds.

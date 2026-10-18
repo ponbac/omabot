@@ -16,9 +16,12 @@ def bot(at, text='on it'):
     return {'kind': 'send-message', 'message': {'type': 'text', 'content': text}, 'timestampMs': at * 1000}
 
 
-def card(at, prompt='Import both files?'):
-    return {'kind': 'send-message', 'timestampMs': at * 1000,
-            'message': {'type': 'widget', 'widget': {'prompt': prompt, 'options': []}}}
+def card(at, prompt='Import both files?', answer=None):
+    entry = {'kind': 'send-message', 'timestampMs': at * 1000,
+             'message': {'type': 'widget', 'widget': {'prompt': prompt, 'options': []}}}
+    if answer is not None:
+        entry['respondedValue'] = answer
+    return entry
 
 
 def event(at):
@@ -39,26 +42,28 @@ class BotStateTest(unittest.TestCase):
         index = {'transcript.replicas.bot': (str(self.blob), self.revision)}
         return self.scope['working_state'](index, 'bot', now)
 
-    def test_interim_acknowledgement_keeps_the_turn_working(self):
-        working, since, _ = self.state([user(NOW - 30), bot(NOW - 28)])
+    def test_unanswered_message_is_working(self):
+        working, since, _ = self.state([bot(NOW - 120), user(NOW - 5)])
         self.assertTrue(working)
-        self.assertEqual(since, NOW - 30)
+        self.assertEqual(since, NOW - 5)
 
-    def test_turn_ends_once_the_bot_goes_quiet(self):
-        quiet = self.scope['WORK_QUIET_S']
-        working, _, _ = self.state([user(NOW - quiet - 60), bot(NOW - quiet - 1)])
-        self.assertFalse(working)
+    def test_any_reply_ends_the_certain_window(self):
+        # 0.71 cannot tell an interim "on it" from a final answer on disk, so
+        # omabot does not guess: a done bot must never read as thinking.
+        self.assertFalse(self.state([user(NOW - 30), bot(NOW - 28)])[0])
 
     def test_unanswered_message_works_until_the_cap(self):
-        self.assertTrue(self.state([user(NOW - 60)])[0])
         self.assertFalse(self.state([user(NOW - self.scope['WORK_CAP_S'] - 1)])[0])
 
-    def test_newest_card_is_waiting_on_you(self):
+    def test_open_card_is_waiting_on_you(self):
         _, _, prompt = self.state([user(NOW - 50), bot(NOW - 45), card(NOW - 40), event(NOW - 39)])
         self.assertEqual(prompt, 'Import both files?')
 
-    def test_card_followed_by_anything_is_answered(self):
-        self.assertEqual(self.state([card(NOW - 40), bot(NOW - 30)])[2], '')
+    def test_tapped_card_is_answered(self):
+        self.assertEqual(self.state([card(NOW - 40, answer='Yes')])[2], '')
+        self.assertEqual(self.state([card(NOW - 40, answer='Yes'), bot(NOW - 30)])[2], '')
+
+    def test_card_answered_by_typing_is_answered(self):
         self.assertEqual(self.state([card(NOW - 40), user(NOW - 30)])[2], '')
 
 

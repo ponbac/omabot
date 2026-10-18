@@ -91,34 +91,35 @@ def load(index, suffix):
     return None
 
 
-# A bot is working from your message until it has gone quiet (see
-# working_state). The app streams replies over its gateway and only persists
-# finished messages, so timing is the only local signal for a turn in flight.
-# Parsing is cached by mtime: transcripts are large and only change when
-# something happens.
+# A bot is working when its transcript ends on a user message it has not
+# answered yet. The app streams replies over its gateway and only persists
+# finished messages, and nothing on disk marks a turn as done: an interim
+# "on it..." and the final answer look the same, and a bot can go quiet for
+# minutes mid-turn. So this is the one window that is certain, and omabot
+# does not guess beyond it. Parsing is cached by mtime: transcripts are large
+# and only change when something happens.
 _transcripts = {}
-# Seen in real 0.71 transcripts: 95% of gaps between a bot's messages within
-# one turn are under 60s, the longest about two minutes.
-WORK_QUIET_S = 90
 # A reply that never came should not leave a bot working forever.
 WORK_CAP_S = 900
 
 
 def pending_card(entries):
-    """Prompt of a question card the bot sent and nothing has followed yet.
+    """Prompt of the newest question card, if it is still unanswered.
 
-    0.71 no longer sets the roster's awaitingUserResponse for cards. A card
-    that has been answered is always followed by something - the reply or the
-    bot carrying on - so an unanswered one is simply the newest entry.
-    Automation notices are skipped: they land after a card without answering it.
+    0.71 no longer sets the roster's awaitingUserResponse for cards. The card
+    entry itself records the choice as respondedValue once it is answered, and
+    a reply typed instead of tapped shows up as a newer user message.
     """
     for e in reversed(entries):
-        if not isinstance(e, dict) or e.get("kind") == "event":
+        if not isinstance(e, dict):
             continue
+        if e.get("kind") == "message" and e.get("role") == "user":
+            return ""
         message = object_value(e.get("message"))
         if e.get("kind") == "send-message" and message.get("type") == "widget":
+            if "respondedValue" in e:
+                return ""
             return text_value(object_value(message.get("widget")).get("prompt"), 320) or "A question is waiting for you."
-        return ""
     return ""
 
 
@@ -140,30 +141,20 @@ def working_state(index, bot_id, now):
             entries = []
         if not isinstance(entries, list):
             entries = []
-        # The newest user message, and the newest bot message after it.
-        last_user = last_bot = 0.0
+        last_user = 0.0
         for e in reversed(entries):
             if not isinstance(e, dict):
                 continue
             kind = e.get("kind")
-            stamp = number_value(e.get("timestampMs")) / 1000.0
             if kind == "send-message" or (kind == "message" and e.get("role") == "assistant"):
-                last_bot = last_bot or stamp
-            elif kind == "message" and e.get("role") == "user":
-                last_user = stamp
                 break
-        _transcripts[bot_id] = (mtime, last_user, last_bot, pending_card(entries))
+            if kind == "message" and e.get("role") == "user":
+                last_user = number_value(e.get("timestampMs")) / 1000.0
+                break
+        _transcripts[bot_id] = (mtime, last_user, pending_card(entries))
         cached = _transcripts[bot_id]
-    _, since, last_bot, card = cached
-    if not since or not 0 <= now - since < WORK_CAP_S:
-        return False, since, card
-    # 0.71 bots acknowledge at once ("on it…") and keep posting through a turn,
-    # and only finished messages are persisted - an interim note and the final
-    # answer look the same. So a turn counts as working until the bot has been
-    # quiet for WORK_QUIET_S after your message.
-    if last_bot < since:
-        return True, since, card
-    return 0 <= now - last_bot < WORK_QUIET_S, since, card
+    _, since, card = cached
+    return bool(since and 0 <= now - since < WORK_CAP_S), since, card
 
 
 # Bots with a picture instead of a shape: the roster gives them a null shape
@@ -470,8 +461,9 @@ def main():
         index = blobs()
         now = time.time()
         state = snapshot(index)
-        # Compare whole snapshots rather than file mtimes: working expires with
-        # time, and liveness follows a pid, neither of which touches a file.
+        # Compare whole snapshots rather than file mtimes: liveness follows a
+        # pid and the working cap expires with time, neither of which touches
+        # a file.
         # Transcripts and avatars are cached by mtime, so this stays cheap.
         comparable = dict(state, generated_ts=None)
         if comparable != last_state or now - last_emit > 60:
