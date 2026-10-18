@@ -91,12 +91,35 @@ def load(index, suffix):
     return None
 
 
-# A bot is working when its transcript ends on a user message it has not
-# answered yet. The app streams replies over its gateway and only persists the
-# finished message, so this is the honest local signal - and it is the same
-# window the app itself shows a busy avatar for. Parsing is cached by mtime:
-# transcripts are large and only change when something happens.
+# A bot is working from your message until it has gone quiet (see
+# working_state). The app streams replies over its gateway and only persists
+# finished messages, so timing is the only local signal for a turn in flight.
+# Parsing is cached by mtime: transcripts are large and only change when
+# something happens.
 _transcripts = {}
+# Seen in real 0.71 transcripts: 95% of gaps between a bot's messages within
+# one turn are under 60s, the longest about two minutes.
+WORK_QUIET_S = 90
+# A reply that never came should not leave a bot working forever.
+WORK_CAP_S = 900
+
+
+def pending_card(entries):
+    """Prompt of a question card the bot sent and nothing has followed yet.
+
+    0.71 no longer sets the roster's awaitingUserResponse for cards. A card
+    that has been answered is always followed by something - the reply or the
+    bot carrying on - so an unanswered one is simply the newest entry.
+    Automation notices are skipped: they land after a card without answering it.
+    """
+    for e in reversed(entries):
+        if not isinstance(e, dict) or e.get("kind") == "event":
+            continue
+        message = object_value(e.get("message"))
+        if e.get("kind") == "send-message" and message.get("type") == "widget":
+            return text_value(object_value(message.get("widget")).get("prompt"), 320) or "A question is waiting for you."
+        return ""
+    return ""
 
 
 def working_state(index, bot_id, now):
@@ -106,7 +129,7 @@ def working_state(index, bot_id, now):
             entry = (path, mtime)
             break
     if not entry:
-        return False, 0.0
+        return False, 0.0, ""
     path, mtime = entry
     cached = _transcripts.get(bot_id)
     if not cached or cached[0] != mtime:
@@ -117,21 +140,30 @@ def working_state(index, bot_id, now):
             entries = []
         if not isinstance(entries, list):
             entries = []
-        last_user = 0.0
+        # The newest user message, and the newest bot message after it.
+        last_user = last_bot = 0.0
         for e in reversed(entries):
             if not isinstance(e, dict):
                 continue
             kind = e.get("kind")
+            stamp = number_value(e.get("timestampMs")) / 1000.0
             if kind == "send-message" or (kind == "message" and e.get("role") == "assistant"):
+                last_bot = last_bot or stamp
+            elif kind == "message" and e.get("role") == "user":
+                last_user = stamp
                 break
-            if kind == "message" and e.get("role") == "user":
-                last_user = number_value(e.get("timestampMs")) / 1000.0
-                break
-        _transcripts[bot_id] = (mtime, last_user)
+        _transcripts[bot_id] = (mtime, last_user, last_bot, pending_card(entries))
         cached = _transcripts[bot_id]
-    since = cached[1]
-    # Cap it: a reply that never came should not leave a bot working forever.
-    return bool(since and 0 <= now - since < 900), since
+    _, since, last_bot, card = cached
+    if not since or not 0 <= now - since < WORK_CAP_S:
+        return False, since, card
+    # 0.71 bots acknowledge at once ("on it…") and keep posting through a turn,
+    # and only finished messages are persisted - an interim note and the final
+    # answer look the same. So a turn counts as working until the bot has been
+    # quiet for WORK_QUIET_S after your message.
+    if last_bot < since:
+        return True, since, card
+    return 0 <= now - last_bot < WORK_QUIET_S, since, card
 
 
 # Bots with a picture instead of a shape: the roster gives them a null shape
@@ -366,7 +398,9 @@ def snapshot(index):
         awaiting = row.get("awaitingUserResponse")
         needs_input = awaiting is True or isinstance(awaiting, dict)
         reason = text_value(object_value(awaiting).get("reason"), 320)
-        working, working_since = working_state(index, bot_id, now)
+        working, working_since, card = working_state(index, bot_id, now)
+        if card and not needs_input:
+            needs_input, reason = True, card
         # Waiting for a decision is not still thinking about the previous message.
         working = working and not needs_input
         notify_enabled = row.get("notifyOnUpdatesEnabled", row.get("notificationsEnabled", False)) is True
@@ -430,29 +464,23 @@ def main():
         except (IndexError, ValueError):
             pass
 
-    last_signature = None
+    last_state = None
     last_emit = 0.0
     while True:
         index = blobs()
-        # Cheap change detection: the roster/marker mtimes plus the blob count.
-        signature = (
-            len(index),
-            tuple(sorted((k, m) for k, (_, m) in index.items()
-                         if k.endswith(("last-roster", "last-sections", "last-agent",
-                                        "ui-agent-refs", "agent-avatars"))
-                         or "transcript.replicas." in k)),
-            os.path.getmtime(MARKER) if os.path.exists(MARKER) else 0,
-            marker()["running"],
-        )
         now = time.time()
-        # Emit on change, and at least once a minute so "app quit" is noticed.
-        if signature != last_signature or now - last_emit > 60:
+        state = snapshot(index)
+        # Compare whole snapshots rather than file mtimes: working expires with
+        # time, and liveness follows a pid, neither of which touches a file.
+        # Transcripts and avatars are cached by mtime, so this stays cheap.
+        comparable = dict(state, generated_ts=None)
+        if comparable != last_state or now - last_emit > 60:
             try:
-                sys.stdout.write(json.dumps(snapshot(index), separators=(",", ":")) + "\n")
+                sys.stdout.write(json.dumps(state, separators=(",", ":")) + "\n")
                 sys.stdout.flush()
             except BrokenPipeError:
                 return
-            last_signature, last_emit = signature, now
+            last_state, last_emit = comparable, now
         time.sleep(interval)
 
 

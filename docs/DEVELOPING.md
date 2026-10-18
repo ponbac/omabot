@@ -63,19 +63,30 @@ chasing a bug that is not there.
 - **Liveness comes from `sand-session-marker.json`** where it exists:
   `aliveAtMs` within 120s means running. Grok Bot 0.71 dropped that heartbeat
   for `desktop-status.json`, which only records a `pid`, so there the app counts
-  as running while that pid is a live `grok-bot` process. Whether it is running
-  is part of the change signature, so start and quit show within one interval.
+  as running while that pid is a live `grok-bot` process.
+- The watcher builds a snapshot every interval and emits when it differs from
+  the last one (ignoring `generated_ts`), or once a minute regardless. Working
+  expires with time and liveness follows a pid, so file mtimes alone would miss
+  both. The caches below keep this cheap.
 
 **Reading it cheaply**
 
 - Transcripts are large and change rarely, so `working_state()` caches by
   **mtime**. Avatar decoding is also cached by blob mtime and cache-directory
   identity; cached files are checked without following symlinks before reuse.
-- A bot is *working* when its transcript ends on a user message with no
-  `send-message` or assistant `message` after it. User-message roles remain
-  top-level in 0.47.0. A structured request for input suppresses that working
-  estimate. It is **capped at 900s**, because an unanswered message should not
-  leave a bot working forever.
+- A bot is *working* from your newest message until it has been quiet for
+  `WORK_QUIET_S` (90s). 0.71 bots acknowledge at once ("on it…") and keep
+  posting through a turn, and only finished messages are persisted, so an
+  interim note and the final answer look the same on disk. In real transcripts
+  95% of gaps within a turn were under 60s, the longest about two minutes; the
+  price is that a finished turn reads as working for up to 90s more. A
+  structured request for input suppresses the estimate, and it is **capped at
+  900s** (`WORK_CAP_S`) so an unanswered message cannot leave a bot working
+  forever.
+- 0.71 no longer sets `awaitingUserResponse` for question cards. A card is a
+  `send-message` whose `message.type` is `widget`, with `widget.prompt`. An
+  answered card is always followed by something, so the bot is *awaiting* when
+  its newest non-`event` entry is a card; the prompt becomes the reason.
 - Avatars arrive as base64 data URLs inside one blob. They are decoded to files
   under `~/.local/state/omarchy/omabot/avatars/`, because QML wants files and a
   200KB string per bot has no business crossing a JSON line every two seconds.
@@ -95,8 +106,9 @@ chasing a bug that is not there.
 - `notifyOnUpdatesEnabled` takes precedence over the older
   `notificationsEnabled` when reading mute state. Desktop notifications remain
   Grok Bot's responsibility; Omabot does not send a second set.
-- Requests retain `awaitingUserResponse.reason`. The roster's running flags
-  are not persisted, so working state remains a transcript-based estimate.
+- Requests retain `awaitingUserResponse.reason` where the app still sets it;
+  otherwise an unanswered card stands in. The roster's running flags are not
+  persisted, so working state remains a transcript-based estimate.
 
 **Bar arrivals**
 
