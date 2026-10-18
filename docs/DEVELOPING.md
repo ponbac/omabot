@@ -60,9 +60,11 @@ chasing a bug that is not there.
   field is read defensively and an unfamiliar shape degrades to an empty roster
   rather than a broken bar. If an app update moves things, `bin/omabot-watch`
   is the one file to fix.
-- **Liveness comes from `sand-session-marker.json`**, not from a process scan:
-  `aliveAtMs` within 120s means running. That is why the bar mark dims without
-  omabot ever looking for a PID.
+- **Liveness comes from `sand-session-marker.json`** where it exists:
+  `aliveAtMs` within 120s means running. Grok Bot 0.71 dropped that heartbeat
+  for `desktop-status.json`, which only records a `pid`, so there the app counts
+  as running while that pid is a live `grok-bot` process. Whether it is running
+  is part of the change signature, so start and quit show within one interval.
 
 **Reading it cheaply**
 

@@ -24,6 +24,8 @@ import time
 STATE = os.path.expanduser("~/.config/Grok Bot")
 PERSIST = os.path.join(STATE, "sand-client-persistence")
 MARKER = os.path.join(STATE, "sand-session-marker.json")
+# Newer builds (0.71+) drop the heartbeat marker for this pid-only status file.
+STATUS = os.path.join(STATE, "desktop-status.json")
 # Where decoded avatar images are kept. Grok Bot stores them as base64 data
 # URLs in one blob; QML wants files, and a 200KB string per bot has no business
 # going through a JSON line every couple of seconds.
@@ -293,12 +295,38 @@ def avatars(index):
         os.close(dirfd)
 
 
+def pid_alive(pid):
+    if type(pid) is not int or pid <= 0:
+        return False
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            return b"grok-bot" in f.read().split(b"\0")[0]
+    except OSError:
+        return False
+
+
+def desktop_status():
+    try:
+        with open(STATUS) as f:
+            data = object_value(json.load(f))
+    except (OSError, ValueError):
+        return {"running": False}
+    return {
+        "running": pid_alive(data.get("pid")),
+        "version": data.get("appVersion"),
+        "pid": data.get("pid"),
+        "started_ts": number_value(data.get("startedAtMs")) / 1000.0,
+        "alive_ts": 0.0,
+        "crash_seen": False,
+    }
+
+
 def marker():
     try:
         with open(MARKER) as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return {"running": False}
+        return desktop_status()
     data = object_value(data)
     alive = number_value(data.get("aliveAtMs")) / 1000.0
     return {
@@ -414,6 +442,7 @@ def main():
                                         "ui-agent-refs", "agent-avatars"))
                          or "transcript.replicas." in k)),
             os.path.getmtime(MARKER) if os.path.exists(MARKER) else 0,
+            marker()["running"],
         )
         now = time.time()
         # Emit on change, and at least once a minute so "app quit" is noticed.
