@@ -107,8 +107,8 @@ def pending_card(entries):
     """Prompt of the newest question card, if it is still unanswered.
 
     0.71 no longer sets the roster's awaitingUserResponse for cards. The card
-    entry itself records the choice as respondedValue once it is answered, and
-    a reply typed instead of tapped shows up as a newer user message.
+    entry records a tapped answer as respondedValue or a skipped question as
+    widgetSkipped=True. A typed reply shows up as a newer user message.
     """
     for e in reversed(entries):
         if not isinstance(e, dict):
@@ -117,7 +117,7 @@ def pending_card(entries):
             return ""
         message = object_value(e.get("message"))
         if e.get("kind") == "send-message" and message.get("type") == "widget":
-            if "respondedValue" in e:
+            if "respondedValue" in e or e.get("widgetSkipped") is True:
                 return ""
             return text_value(object_value(message.get("widget")).get("prompt"), 320) or "A question is waiting for you."
     return ""

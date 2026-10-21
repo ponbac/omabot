@@ -66,6 +66,25 @@ class BotStateTest(unittest.TestCase):
     def test_card_answered_by_typing_is_answered(self):
         self.assertEqual(self.state([card(NOW - 40), user(NOW - 30)])[2], '')
 
+    def test_skipped_card_is_resolved_without_reviving_older_prompt(self):
+        skipped = dict(card(NOW - 30, prompt='Newest question'), widgetSkipped=True)
+        working, _, prompt = self.state([
+            card(NOW - 40, prompt='Older question'), skipped,
+            event(NOW - 29), bot(NOW - 28),
+        ])
+        self.assertEqual(prompt, '')
+        self.assertFalse(working)
+
+    def test_only_true_skip_flag_resolves_an_unanswered_card(self):
+        for value in (True, False, None, 0, 'true'):
+            with self.subTest(widgetSkipped=value):
+                entry = dict(card(NOW - 30), widgetSkipped=value)
+                self.assertEqual(self.state([entry])[2], '' if value is True else 'Import both files?')
+
+    def test_new_question_after_skipped_card_still_needs_answer(self):
+        skipped = dict(card(NOW - 40, prompt='Skipped question'), widgetSkipped=True)
+        self.assertEqual(self.state([skipped, card(NOW - 30, prompt='New question')])[2], 'New question')
+
 
 if __name__ == '__main__':
     unittest.main()

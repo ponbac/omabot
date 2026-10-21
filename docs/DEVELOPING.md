@@ -85,8 +85,10 @@ chasing a bug that is not there.
 - 0.71 no longer sets `awaitingUserResponse` for question cards. A card is a
   `send-message` whose `message.type` is `widget`, with `widget.prompt`. A
   tapped answer is stored on the card as `respondedValue`; a typed one shows up
-  as a newer user message. The bot is *awaiting* when its newest card has
-  neither; the prompt becomes the reason.
+  as a newer user message. Grok Bot 0.75 also persists skipped cards with
+  `widgetSkipped: true`. The newest card must be unanswered and not skipped
+  for the bot to be *awaiting*; its prompt becomes the reason. A resolved newest
+  card does not revive an older question. Only boolean `true` means skipped.
 - Avatars arrive as base64 data URLs inside one blob. They are decoded to files
   under `~/.local/state/omarchy/omabot/avatars/`, because QML wants files and a
   200KB string per bot has no business crossing a JSON line every two seconds.
